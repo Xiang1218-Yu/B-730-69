@@ -96,10 +96,18 @@ const rules = {
   ],
 }
 
+// 请求锁，防止重复点击
+const smsSending = ref(false)
+
 /**
  * 发送验证码
  */
 function sendCode() {
+  // 逻辑层守卫：倒计时中或正在发送时直接返回（兜底防重）
+  if (isCounting() || smsSending.value) {
+    return
+  }
+
   if (!form.phone) {
     ElMessage.warning('请先输入手机号')
     return
@@ -109,12 +117,24 @@ function sendCode() {
     return
   }
 
-  const result = auth.sendSmsCode(form.phone)
-  if (result.success) {
-    ElMessage.success(result.message)
-    startCountdown()
-  } else {
-    ElMessage.error(result.message)
+  // 校验手机号是否已注册
+  const checkResult = auth.checkPhoneRegistered(form.phone)
+  if (!checkResult.success) {
+    ElMessage.error(checkResult.message)
+    return
+  }
+
+  smsSending.value = true
+  try {
+    const result = auth.sendSmsCode(form.phone)
+    if (result.success) {
+      ElMessage.success(result.message)
+      startCountdown()
+    } else {
+      ElMessage.error(result.message)
+    }
+  } finally {
+    smsSending.value = false
   }
 }
 
@@ -229,10 +249,11 @@ onMounted(() => {
                 <button
                   class="code-btn"
                   type="button"
-                  :disabled="isCounting()"
+                  :class="{ disabled: isCounting() || smsSending }"
+                  :disabled="isCounting() || smsSending"
                   @click="sendCode"
                 >
-                  {{ smsBtnText }}
+                  {{ smsSending ? '发送中...' : smsBtnText }}
                 </button>
               </div>
             </el-form-item>

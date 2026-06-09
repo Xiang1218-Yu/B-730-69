@@ -19,6 +19,7 @@ const { countdown, start: startCountdown, isCounting } = useCountdown(60)
 
 const formRef = ref(null)
 const loading = ref(false)
+const smsSending = ref(false)
 
 // 当前手机号（脱敏显示）
 const currentPhoneDisplay = computed(() => {
@@ -65,6 +66,11 @@ const rules = {
  * 发送验证码到新手机号
  */
 function sendCode() {
+  // 逻辑层守卫：倒计时中或正在发送时直接返回（兜底防重）
+  if (isCounting() || smsSending.value) {
+    return
+  }
+
   if (!form.newPhone) {
     ElMessage.warning('请先输入新手机号')
     return
@@ -78,12 +84,17 @@ function sendCode() {
     return
   }
 
-  const result = auth.sendSmsCode(form.newPhone)
-  if (result.success) {
-    ElMessage.success(result.message)
-    startCountdown()
-  } else {
-    ElMessage.error(result.message)
+  smsSending.value = true
+  try {
+    const result = auth.sendSmsCode(form.newPhone)
+    if (result.success) {
+      ElMessage.success(result.message)
+      startCountdown()
+    } else {
+      ElMessage.error(result.message)
+    }
+  } finally {
+    smsSending.value = false
   }
 }
 
@@ -162,10 +173,11 @@ onMounted(() => {
               <button
                 class="code-btn"
                 type="button"
-                :disabled="isCounting()"
+                :class="{ disabled: isCounting() || smsSending }"
+                :disabled="isCounting() || smsSending"
                 @click="sendCode"
               >
-                {{ smsBtnText }}
+                {{ smsSending ? '发送中...' : smsBtnText }}
               </button>
             </div>
           </el-form-item>

@@ -225,6 +225,25 @@ export const useAuthStore = defineStore('auth', {
     },
 
     /**
+     * 检查手机号是否已注册
+     * @param {string} phone - 手机号
+     * @returns {{ success: boolean, message: string }}
+     */
+    checkPhoneRegistered(phone) {
+      const users = this.loadUsers()
+      const trimmedPhone = String(phone).trim()
+
+      // 查找对应该手机号的用户
+      for (const [username, data] of Object.entries(users)) {
+        if (data.phone === trimmedPhone || username === trimmedPhone) {
+          return { success: true, message: '该手机号已注册' }
+        }
+      }
+
+      return { success: false, message: '该手机号未注册账号' }
+    },
+
+    /**
      * 重置密码
      * @param {Object} params - 重置参数
      * @param {string} params.phone - 手机号
