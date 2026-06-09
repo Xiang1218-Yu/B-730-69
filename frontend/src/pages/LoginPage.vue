@@ -109,6 +109,13 @@ function validatePhone(phone) {
   return /^1[3-9]\d{9}$/.test(phone)
 }
 
+// 密码规则辅助函数（避免在模板中直接使用含特殊字符的正则表达式）
+const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/
+function hasUpper(pwd) { return /[A-Z]/.test(pwd) }
+function hasLower(pwd) { return /[a-z]/.test(pwd) }
+function hasSpecial(pwd) { return SPECIAL_CHAR_RE.test(pwd) }
+function hasMinLen(pwd, len) { return pwd && pwd.length >= len }
+
 const rules = {
   username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
   phone: [
@@ -418,16 +425,16 @@ onMounted(() => {
 
           <!-- 注册时显示密码要求提示 -->
           <div v-if="mode === 'register'" class="password-tips">
-            <div :class="['tip', { met: form.password && /[A-Z]/.test(form.password) }]">
+            <div :class="['tip', { met: form.password && hasUpper(form.password) }]">
               包含大写字母
             </div>
-            <div :class="['tip', { met: form.password && /[a-z]/.test(form.password) }]">
+            <div :class="['tip', { met: form.password && hasLower(form.password) }]">
               包含小写字母
             </div>
-            <div :class="['tip', { met: form.password && /[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?`~]/.test(form.password) }]">
+            <div :class="['tip', { met: form.password && hasSpecial(form.password) }]">
               包含特殊字符
             </div>
-            <div :class="['tip', { met: form.password && form.password.length >= 8 }]">
+            <div :class="['tip', { met: hasMinLen(form.password, 8) }]">
               至少8位
             </div>
           </div>
@@ -519,16 +526,16 @@ onMounted(() => {
           </span>
         </div>
         <div class="password-tips">
-          <div :class="['tip', { met: resetForm.newPassword && /[A-Z]/.test(resetForm.newPassword) }]">
+          <div :class="['tip', { met: resetForm.newPassword && hasUpper(resetForm.newPassword) }]">
             包含大写字母
           </div>
-          <div :class="['tip', { met: resetForm.newPassword && /[a-z]/.test(resetForm.newPassword) }]">
+          <div :class="['tip', { met: resetForm.newPassword && hasLower(resetForm.newPassword) }]">
             包含小写字母
           </div>
-          <div :class="['tip', { met: resetForm.newPassword && /[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?`~]/.test(resetForm.newPassword) }]">
+          <div :class="['tip', { met: resetForm.newPassword && hasSpecial(resetForm.newPassword) }]">
             包含特殊字符
           </div>
-          <div :class="['tip', { met: resetForm.newPassword && resetForm.newPassword.length >= 8 }]">
+          <div :class="['tip', { met: hasMinLen(resetForm.newPassword, 8) }]">
             至少8位
           </div>
         </div>

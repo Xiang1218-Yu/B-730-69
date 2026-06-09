@@ -60,6 +60,13 @@ function validateIdNumber(id) {
   return /^\d{17}[\dXx]$/.test(id)
 }
 
+// 密码规则辅助函数（避免在模板中直接使用含特殊字符的正则表达式）
+const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/
+function hasUpper(pwd) { return /[A-Z]/.test(pwd) }
+function hasLower(pwd) { return /[a-z]/.test(pwd) }
+function hasSpecial(pwd) { return SPECIAL_CHAR_RE.test(pwd) }
+function hasMinLen(pwd, len) { return pwd && pwd.length >= len }
+
 // ===== 修改密码 =====
 const pwdOpen = ref(false)
 const pwdFormRef = ref(null)
@@ -384,16 +391,16 @@ function maskPhone(phone) {
           </span>
         </div>
         <div class="password-tips">
-          <div :class="['tip', { met: pwdForm.newPassword && /[A-Z]/.test(pwdForm.newPassword) }]">
+          <div :class="['tip', { met: pwdForm.newPassword && hasUpper(pwdForm.newPassword) }]">
             包含大写字母
           </div>
-          <div :class="['tip', { met: pwdForm.newPassword && /[a-z]/.test(pwdForm.newPassword) }]">
+          <div :class="['tip', { met: pwdForm.newPassword && hasLower(pwdForm.newPassword) }]">
             包含小写字母
           </div>
-          <div :class="['tip', { met: pwdForm.newPassword && /[!@#$%^&*()_+\-=\[\]{};':\"\\|,.<>\/?`~]/.test(pwdForm.newPassword) }]">
+          <div :class="['tip', { met: pwdForm.newPassword && hasSpecial(pwdForm.newPassword) }]">
             包含特殊字符
           </div>
-          <div :class="['tip', { met: pwdForm.newPassword && pwdForm.newPassword.length >= 8 }]">
+          <div :class="['tip', { met: hasMinLen(pwdForm.newPassword, 8) }]">
             至少8位
           </div>
         </div>
