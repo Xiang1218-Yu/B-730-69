@@ -1,11 +1,15 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import CaptchaCanvas from '../components/CaptchaCanvas.vue'
 import { scenicImage } from '../utils/media'
-import { useAuthStore } from '../store/auth'
+import {
+  useAuthStore,
+  validatePasswordStrength,
+  validatePhone,
+} from '../store/auth'
 
 const router = useRouter()
 const route = useRoute()
@@ -14,39 +18,74 @@ auth.hydrate()
 
 const bg = scenicImage('login-bg', { title: '悦行山海', subtitle: '登录' })
 
+// 验证码相关
 const captchaExpected = ref('')
 const captchaRef = ref(null)
 const formRef = ref(null)
 const loading = ref(false)
 
+// 切换登录 / 注册
 const mode = ref('login')
 const modeOptions = [
   { label: '登录', value: 'login' },
   { label: '注册', value: 'register' },
 ]
 
+// 找回密码（重置密码）弹窗
 const forgotOpen = ref(false)
-const forgotForm = reactive({ username: '', contact: '' })
+const forgotForm = reactive({
+  username: '',
+  phone: '',
+  newPassword: '',
+  confirmPassword: '',
+})
+const forgotLoading = ref(false)
 
 const rememberKey = 'yuexing_login_remember'
-const usersKey = 'yuexing_users'
+
+// 表单数据
 const form = reactive({
   username: '',
   password: '',
   confirmPassword: '',
+  phone: '',
   captcha: '',
   remember: true,
 })
 
+/**
+ * Element Plus 校验器：密码强度
+ * 注册时需满足强度规则，登录时仅校验非空
+ */
+function passwordValidator(rule, value, callback) {
+  if (!value) return callback(new Error('请输入密码'))
+  if (mode.value !== 'register') return callback()
+  const result = validatePasswordStrength(value)
+  if (!result.ok) return callback(new Error(result.message))
+  callback()
+}
+
 const rules = {
   username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  password: [{ required: true, validator: passwordValidator, trigger: 'blur' }],
   confirmPassword: [
     {
       validator: (rule, value, callback) => {
         if (mode.value !== 'register') return callback()
         if (!value) return callback(new Error('请再次输入密码'))
         if (String(value) !== String(form.password)) return callback(new Error('两次密码不一致'))
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  phone: [
+    {
+      validator: (rule, value, callback) => {
+        // 注册时手机号必填且格式正确
+        if (mode.value !== 'register') return callback()
+        if (!value) return callback(new Error('请输入手机号'))
+        if (!validatePhone(value)) return callback(new Error('手机号格式不正确'))
         callback()
       },
       trigger: 'blur',
@@ -67,6 +106,22 @@ const rules = {
   ],
 }
 
+// 密码强度提示（仅注册模式实时反馈）
+const passwordStrength = computed(() => {
+  if (!form.password) return { level: 0, text: '', tip: '至少 8 位，含大小写字母、数字与特殊字符' }
+  const checks = {
+    length: form.password.length >= 8,
+    upper: /[A-Z]/.test(form.password),
+    lower: /[a-z]/.test(form.password),
+    digit: /\d/.test(form.password),
+    special: /[!@#$%^&*()_+\-={}\[\]:;"'<>,.?/\\|`~]/.test(form.password),
+  }
+  const passed = Object.values(checks).filter(Boolean).length
+  const text = passed >= 5 ? '强' : passed >= 3 ? '中' : '弱'
+  return { level: passed, text, checks, tip: '至少 8 位，含大小写字母、数字与特殊字符' }
+})
+
+// base64 编解码用于"记住密码"的本地存储
 function encode(value) {
   try {
     return btoa(unescape(encodeURIComponent(value)))
@@ -114,21 +169,7 @@ function onCaptchaChange(value) {
   captchaExpected.value = value
 }
 
-function loadUsers() {
-  const raw = localStorage.getItem(usersKey)
-  if (!raw) return {}
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-function saveUsers(users) {
-  localStorage.setItem(usersKey, JSON.stringify(users))
-}
-
+// 提交登录或注册
 async function submit(formEl) {
   const el = formEl?.value ?? formEl
   if (!el) return
@@ -136,38 +177,30 @@ async function submit(formEl) {
     if (!valid) return
     loading.value = true
     try {
-      const users = loadUsers()
       const username = String(form.username).trim()
       const password = String(form.password)
 
       if (mode.value === 'register') {
-        if (users[username]) {
-          ElMessage.warning('账号已存在，请直接登录')
-          mode.value = 'login'
+        // 调用 store 完成注册
+        const result = auth.register({ username, password, phone: form.phone })
+        if (!result.ok) {
+          ElMessage.warning(result.message)
           return
         }
-        users[username] = { password: encode(password), createdAt: new Date().toISOString() }
-        saveUsers(users)
         ElMessage.success('注册成功，请登录')
         mode.value = 'login'
         form.confirmPassword = ''
+        form.phone = ''
         return
       }
 
-      const exists = users[username]
-      if (!exists) {
-        ElMessage.warning('账号不存在，请先注册')
-        mode.value = 'register'
-        form.confirmPassword = ''
+      // 登录
+      const result = auth.login({ username, password })
+      if (!result.ok) {
+        ElMessage.error(result.message)
         return
       }
-      if (decode(exists.password) !== password) {
-        ElMessage.error('密码不正确')
-        return
-      }
-
       saveRemembered()
-      auth.login({ username })
       ElMessage.success('登录成功')
       const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/home'
       router.replace(redirect)
@@ -177,19 +210,45 @@ async function submit(formEl) {
   })
 }
 
+// 打开重置密码弹窗
 function openForgot() {
   forgotForm.username = form.username
-  forgotForm.contact = ''
+  forgotForm.phone = ''
+  forgotForm.newPassword = ''
+  forgotForm.confirmPassword = ''
   forgotOpen.value = true
 }
 
+// 提交重置密码
 function submitForgot() {
-  if (!forgotForm.username || !forgotForm.contact) {
-    ElMessage.warning('请填写账号与联系方式')
+  if (!forgotForm.username || !forgotForm.phone) {
+    ElMessage.warning('请填写账号与手机号')
     return
   }
-  forgotOpen.value = false
-  ElMessage.success('已提交找回申请（演示）')
+  if (!validatePhone(forgotForm.phone)) {
+    ElMessage.warning('手机号格式不正确')
+    return
+  }
+  if (forgotForm.newPassword !== forgotForm.confirmPassword) {
+    ElMessage.warning('两次密码不一致')
+    return
+  }
+  forgotLoading.value = true
+  try {
+    const result = auth.resetPassword({
+      username: forgotForm.username,
+      phone: forgotForm.phone,
+      newPassword: forgotForm.newPassword,
+    })
+    if (!result.ok) {
+      ElMessage.error(result.message)
+      return
+    }
+    ElMessage.success(result.message)
+    forgotOpen.value = false
+  } finally {
+    forgotLoading.value = false
+  }
 }
 
 function openThirdLogin(provider) {
@@ -227,8 +286,23 @@ onMounted(() => {
           <el-form-item label="密码" prop="password">
             <el-input v-model="form.password" placeholder="请输入密码" show-password clearable />
           </el-form-item>
+          <!-- 注册模式：密码强度提示 -->
+          <div v-if="mode === 'register'" class="strength">
+            <div class="bar">
+              <span :class="['seg', passwordStrength.level >= 1 ? 'active' : '']" />
+              <span :class="['seg', passwordStrength.level >= 3 ? 'active' : '']" />
+              <span :class="['seg', passwordStrength.level >= 5 ? 'active' : '']" />
+            </div>
+            <div class="tip">
+              <span v-if="passwordStrength.text">强度：{{ passwordStrength.text }} · </span>
+              <span>{{ passwordStrength.tip }}</span>
+            </div>
+          </div>
           <el-form-item v-if="mode === 'register'" label="确认密码" prop="confirmPassword">
             <el-input v-model="form.confirmPassword" placeholder="请再次输入密码" show-password clearable />
+          </el-form-item>
+          <el-form-item v-if="mode === 'register'" label="手机号" prop="phone">
+            <el-input v-model="form.phone" placeholder="用于找回密码与实名认证" maxlength="11" clearable />
           </el-form-item>
           <el-form-item label="验证码" prop="captcha">
             <div class="captcha-row">
@@ -263,18 +337,29 @@ onMounted(() => {
       </div>
     </div>
 
-    <el-dialog v-model="forgotOpen" title="找回密码" width="420px">
+    <!-- 找回 / 重置密码弹窗 -->
+    <el-dialog v-model="forgotOpen" title="重置密码" width="440px">
       <el-form label-position="top">
         <el-form-item label="账号">
           <el-input v-model="forgotForm.username" placeholder="请输入账号" />
         </el-form-item>
-        <el-form-item label="联系方式">
-          <el-input v-model="forgotForm.contact" placeholder="手机号 / 邮箱" />
+        <el-form-item label="注册手机号">
+          <el-input v-model="forgotForm.phone" placeholder="用于校验身份" maxlength="11" />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input
+            v-model="forgotForm.newPassword"
+            placeholder="至少 8 位，含大小写字母、数字与特殊字符"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item label="确认新密码">
+          <el-input v-model="forgotForm.confirmPassword" placeholder="请再次输入新密码" show-password />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="forgotOpen = false">取消</el-button>
-        <el-button type="primary" @click="submitForgot">提交</el-button>
+        <el-button type="primary" :loading="forgotLoading" @click="submitForgot">提交</el-button>
       </template>
     </el-dialog>
   </div>
@@ -357,6 +442,42 @@ onMounted(() => {
 
 .mode {
   margin-bottom: 12px;
+}
+
+/* 密码强度条 */
+.strength {
+  margin: -8px 0 8px;
+}
+
+.strength .bar {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.strength .seg {
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(12, 35, 64, 0.1);
+}
+
+.strength .seg.active:nth-child(1) {
+  background: #f56c6c;
+}
+
+.strength .seg.active:nth-child(2) {
+  background: #e6a23c;
+}
+
+.strength .seg.active:nth-child(3) {
+  background: #67c23a;
+}
+
+.strength .tip {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
 }
 
 .captcha-row {
