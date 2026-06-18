@@ -1,46 +1,93 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import CaptchaCanvas from '../components/CaptchaCanvas.vue'
 import { scenicImage } from '../utils/media'
 import { useAuthStore } from '../store/auth'
+import { validatePassword, validatePhone, getStrengthInfo } from '../utils/validators'
+import { encode, decode } from '../utils/crypto'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 auth.hydrate()
 
+// 背景图
 const bg = scenicImage('login-bg', { title: '悦行山海', subtitle: '登录' })
 
+// 表单引用和状态
 const captchaExpected = ref('')
 const captchaRef = ref(null)
 const formRef = ref(null)
 const loading = ref(false)
 
+// 模式切换：login / register
 const mode = ref('login')
 const modeOptions = [
   { label: '登录', value: 'login' },
   { label: '注册', value: 'register' },
 ]
 
-const forgotOpen = ref(false)
-const forgotForm = reactive({ username: '', contact: '' })
+// 密码强度状态
+const passwordStrength = ref(0)
 
+// 记住密码相关
 const rememberKey = 'yuexing_login_remember'
-const usersKey = 'yuexing_users'
+
+// 表单数据
 const form = reactive({
   username: '',
+  phone: '',
   password: '',
   confirmPassword: '',
   captcha: '',
   remember: true,
 })
 
+// 监听密码输入，实时计算强度
+watch(() => form.password, (val) => {
+  const result = validatePassword(val)
+  passwordStrength.value = result.strength
+})
+
+// 计算密码强度显示信息
+const strengthInfo = computed(() => getStrengthInfo(passwordStrength.value))
+
+// 表单验证规则
 const rules = {
-  username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  username: [
+    { required: true, message: '请输入账号', trigger: 'blur' },
+  ],
+  phone: [
+    {
+      validator: (rule, value, callback) => {
+        if (mode.value !== 'register') return callback()
+        if (!value) return callback(new Error('请输入手机号'))
+        if (!validatePhone(value)) return callback(new Error('请输入正确的手机号格式'))
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (!value) return callback()
+        // 登录时不强制密码强度（兼容旧账号），注册时强制
+        if (mode.value === 'register') {
+          const result = validatePassword(value)
+          if (!result.valid) {
+            return callback(new Error(result.message))
+          }
+        }
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
   confirmPassword: [
     {
       validator: (rule, value, callback) => {
@@ -67,22 +114,9 @@ const rules = {
   ],
 }
 
-function encode(value) {
-  try {
-    return btoa(unescape(encodeURIComponent(value)))
-  } catch {
-    return ''
-  }
-}
-
-function decode(value) {
-  try {
-    return decodeURIComponent(escape(atob(value)))
-  } catch {
-    return ''
-  }
-}
-
+/**
+ * 加载记住的账号密码
+ */
 function loadRemembered() {
   const raw = localStorage.getItem(rememberKey)
   if (!raw) return
@@ -94,6 +128,9 @@ function loadRemembered() {
   } catch {}
 }
 
+/**
+ * 保存记住的账号密码
+ */
 function saveRemembered() {
   if (!form.remember) {
     localStorage.removeItem(rememberKey)
@@ -110,88 +147,82 @@ function saveRemembered() {
   )
 }
 
+/**
+ * 验证码变化回调
+ */
 function onCaptchaChange(value) {
   captchaExpected.value = value
 }
 
-function loadUsers() {
-  const raw = localStorage.getItem(usersKey)
-  if (!raw) return {}
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-function saveUsers(users) {
-  localStorage.setItem(usersKey, JSON.stringify(users))
-}
-
+/**
+ * 提交表单（登录/注册）
+ */
 async function submit(formEl) {
   const el = formEl?.value ?? formEl
   if (!el) return
+
   await el.validate(async (valid) => {
     if (!valid) return
+
     loading.value = true
     try {
-      const users = loadUsers()
-      const username = String(form.username).trim()
-      const password = String(form.password)
+      let result
 
       if (mode.value === 'register') {
-        if (users[username]) {
-          ElMessage.warning('账号已存在，请直接登录')
+        // 注册流程
+        result = auth.register({
+          username: form.username,
+          password: form.password,
+          phone: form.phone,
+        })
+
+        if (result.success) {
+          ElMessage.success('注册成功，请登录')
           mode.value = 'login'
-          return
+          form.confirmPassword = ''
+          form.password = ''
+          form.phone = ''
+          if (captchaRef.value) {
+            captchaRef.value.refresh()
+          }
+        } else {
+          ElMessage.warning(result.message)
         }
-        users[username] = { password: encode(password), createdAt: new Date().toISOString() }
-        saveUsers(users)
-        ElMessage.success('注册成功，请登录')
-        mode.value = 'login'
-        form.confirmPassword = ''
-        return
-      }
+      } else {
+        // 登录流程
+        result = auth.login({
+          username: form.username,
+          password: form.password,
+        })
 
-      const exists = users[username]
-      if (!exists) {
-        ElMessage.warning('账号不存在，请先注册')
-        mode.value = 'register'
-        form.confirmPassword = ''
-        return
+        if (result.success) {
+          saveRemembered()
+          ElMessage.success(result.message)
+          const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/home'
+          router.replace(redirect)
+        } else {
+          ElMessage.error(result.message)
+          if (captchaRef.value) {
+            captchaRef.value.refresh()
+          }
+        }
       }
-      if (decode(exists.password) !== password) {
-        ElMessage.error('密码不正确')
-        return
-      }
-
-      saveRemembered()
-      auth.login({ username })
-      ElMessage.success('登录成功')
-      const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/home'
-      router.replace(redirect)
     } finally {
       loading.value = false
     }
   })
 }
 
-function openForgot() {
-  forgotForm.username = form.username
-  forgotForm.contact = ''
-  forgotOpen.value = true
+/**
+ * 跳转到密码重置页
+ */
+function goToReset() {
+  router.push('/reset-password')
 }
 
-function submitForgot() {
-  if (!forgotForm.username || !forgotForm.contact) {
-    ElMessage.warning('请填写账号与联系方式')
-    return
-  }
-  forgotOpen.value = false
-  ElMessage.success('已提交找回申请（演示）')
-}
-
+/**
+ * 第三方登录入口（演示）
+ */
 function openThirdLogin(provider) {
   const label = provider === 'wechat' ? '微信' : provider === 'alipay' ? '支付宝' : '第三方'
   ElMessage.info(`${label}快捷登录入口（演示）`)
@@ -220,16 +251,40 @@ onMounted(() => {
         <div class="mode">
           <el-segmented v-model="mode" :options="modeOptions" />
         </div>
+
         <el-form :model="form" :rules="rules" label-position="top" class="form" ref="formRef">
           <el-form-item label="账号" prop="username">
-            <el-input v-model="form.username" placeholder="手机号 / 邮箱 / 用户名" clearable />
+            <el-input v-model="form.username" placeholder="用户名 / 手机号" clearable />
           </el-form-item>
+
+          <!-- 注册时显示手机号输入 -->
+          <el-form-item v-if="mode === 'register'" label="手机号" prop="phone">
+            <el-input v-model="form.phone" placeholder="请输入手机号" clearable maxlength="11" />
+          </el-form-item>
+
           <el-form-item label="密码" prop="password">
             <el-input v-model="form.password" placeholder="请输入密码" show-password clearable />
+            <!-- 密码强度提示 -->
+            <div v-if="mode === 'register' && form.password" class="password-strength">
+              <div class="strength-bar">
+                <div
+                  class="strength-fill"
+                  :style="{ width: strengthInfo.width, background: strengthInfo.color }"
+                />
+              </div>
+              <span class="strength-text" :style="{ color: strengthInfo.color }">
+                密码强度：{{ strengthInfo.label }}
+              </span>
+              <div class="strength-tips">
+                需包含：大小写字母、数字、特殊字符（!@#$%^&*等），长度8-20位
+              </div>
+            </div>
           </el-form-item>
+
           <el-form-item v-if="mode === 'register'" label="确认密码" prop="confirmPassword">
             <el-input v-model="form.confirmPassword" placeholder="请再次输入密码" show-password clearable />
           </el-form-item>
+
           <el-form-item label="验证码" prop="captcha">
             <div class="captcha-row">
               <el-input v-model="form.captcha" placeholder="不区分大小写" clearable />
@@ -239,7 +294,7 @@ onMounted(() => {
 
           <div class="extra">
             <el-checkbox v-model="form.remember">记住密码</el-checkbox>
-            <a class="forgot" href="#" @click.prevent="openForgot">忘记密码？</a>
+            <a class="forgot" href="#" @click.prevent="goToReset">忘记密码？</a>
           </div>
 
           <button class="submit" type="button" :disabled="loading" @click="submit(formRef)">
@@ -262,21 +317,6 @@ onMounted(() => {
         </el-form>
       </div>
     </div>
-
-    <el-dialog v-model="forgotOpen" title="找回密码" width="420px">
-      <el-form label-position="top">
-        <el-form-item label="账号">
-          <el-input v-model="forgotForm.username" placeholder="请输入账号" />
-        </el-form-item>
-        <el-form-item label="联系方式">
-          <el-input v-model="forgotForm.contact" placeholder="手机号 / 邮箱" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="forgotOpen = false">取消</el-button>
-        <el-button type="primary" @click="submitForgot">提交</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -388,10 +428,16 @@ onMounted(() => {
   color: #fff;
   background: linear-gradient(135deg, var(--brand-primary), rgba(125, 209, 129, 0.92));
   box-shadow: 0 16px 34px rgba(74, 144, 226, 0.25);
+  border-radius: 14px;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.2s ease;
 }
 
 .submit:hover {
   background: linear-gradient(135deg, rgba(74, 144, 226, 0.92), rgba(125, 209, 129, 0.98));
+  transform: translateY(-1px);
 }
 
 .submit:disabled {
@@ -450,6 +496,38 @@ onMounted(() => {
 .third-icon {
   height: 22px;
   width: 22px;
+}
+
+/* 密码强度样式 */
+.password-strength {
+  margin-top: 8px;
+}
+
+.strength-bar {
+  height: 6px;
+  background: rgba(12, 35, 64, 0.08);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.strength-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: all 0.3s ease;
+}
+
+.strength-text {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.strength-tips {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 @media (max-width: 920px) {

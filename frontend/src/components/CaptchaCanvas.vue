@@ -23,6 +23,10 @@ function draw() {
   const ctx = canvas.getContext('2d')
   const w = canvas.width
   const h = canvas.height
+  
+  // 清除画布，防止重绘时文字重叠
+  ctx.clearRect(0, 0, w, h)
+  
   const bg1 = `rgba(74, 144, 226, ${Math.random() * 0.12 + 0.18})`
   const bg2 = `rgba(125, 209, 129, ${Math.random() * 0.12 + 0.16})`
   const g = ctx.createLinearGradient(0, 0, w, h)
