@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
@@ -19,28 +19,128 @@ const captchaRef = ref(null)
 const formRef = ref(null)
 const loading = ref(false)
 
+// 当前模式：登录 / 注册
 const mode = ref('login')
 const modeOptions = [
   { label: '登录', value: 'login' },
   { label: '注册', value: 'register' },
 ]
 
-const forgotOpen = ref(false)
-const forgotForm = reactive({ username: '', contact: '' })
+// 密码重置对话框
+const resetOpen = ref(false)
+const resetStep = ref(1)
+const resetFormRef = ref(null)
+const resetForm = reactive({
+  username: '',
+  phone: '',
+  newPassword: '',
+  confirmPassword: '',
+  captcha: '',
+})
+const resetCaptchaExpected = ref('')
+const resetCaptchaRef = ref(null)
 
+// 记住密码相关
 const rememberKey = 'yuexing_login_remember'
-const usersKey = 'yuexing_users'
 const form = reactive({
   username: '',
   password: '',
   confirmPassword: '',
+  phone: '',
   captcha: '',
   remember: true,
 })
 
+// 密码强度校验：必须包含大写字母、小写字母和特殊字符
+function validatePasswordStrength(password) {
+  if (!password) return { valid: false, msg: '请输入密码' }
+  if (password.length < 8) return { valid: false, msg: '密码长度不能少于8位' }
+  const hasUpper = /[A-Z]/.test(password)
+  const hasLower = /[a-z]/.test(password)
+  const hasSpecial = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password)
+  if (!hasUpper) return { valid: false, msg: '密码必须包含大写字母' }
+  if (!hasLower) return { valid: false, msg: '密码必须包含小写字母' }
+  if (!hasSpecial) return { valid: false, msg: '密码必须包含特殊字符（如 !@#$% 等）' }
+  return { valid: true, msg: '' }
+}
+
+// 计算密码强度等级（用于可视化展示）
+const passwordStrength = computed(() => {
+  const pwd = form.password
+  if (!pwd) return 0
+  let score = 0
+  if (pwd.length >= 8) score++
+  if (/[A-Z]/.test(pwd)) score++
+  if (/[a-z]/.test(pwd)) score++
+  if (/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(pwd)) score++
+  if (pwd.length >= 12) score++
+  return score
+})
+
+const passwordStrengthLabel = computed(() => {
+  const s = passwordStrength.value
+  if (s <= 1) return '弱'
+  if (s <= 3) return '中'
+  return '强'
+})
+
+const passwordStrengthColor = computed(() => {
+  const s = passwordStrength.value
+  if (s <= 1) return '#f56c6c'
+  if (s <= 3) return '#e6a23c'
+  return '#67c23a'
+})
+
+// 重置密码的强度校验
+const resetPasswordStrength = computed(() => {
+  const pwd = resetForm.newPassword
+  if (!pwd) return 0
+  let score = 0
+  if (pwd.length >= 8) score++
+  if (/[A-Z]/.test(pwd)) score++
+  if (/[a-z]/.test(pwd)) score++
+  if (/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(pwd)) score++
+  if (pwd.length >= 12) score++
+  return score
+})
+
+// 手机号校验
+function validatePhone(phone) {
+  return /^1[3-9]\d{9}$/.test(phone)
+}
+
+// 密码规则辅助函数（避免在模板中直接使用含特殊字符的正则表达式）
+const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/
+function hasUpper(pwd) { return /[A-Z]/.test(pwd) }
+function hasLower(pwd) { return /[a-z]/.test(pwd) }
+function hasSpecial(pwd) { return SPECIAL_CHAR_RE.test(pwd) }
+function hasMinLen(pwd, len) { return pwd && pwd.length >= len }
+
 const rules = {
   username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (mode.value !== 'register') return callback()
+        if (!validatePhone(value)) return callback(new Error('请输入正确的11位手机号'))
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  password: [
+    { required: true, message: '请输入密码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (mode.value !== 'register') return callback()
+        const result = validatePasswordStrength(value)
+        if (!result.valid) return callback(new Error(result.msg))
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
   confirmPassword: [
     {
       validator: (rule, value, callback) => {
@@ -60,6 +160,55 @@ const rules = {
         if (String(value).trim().toUpperCase() !== String(captchaExpected.value).toUpperCase()) {
           return callback(new Error('验证码不正确'))
         }
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+}
+
+// 重置密码表单校验规则
+const resetRules = {
+  username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
+  phone: [
+    { required: true, message: '请输入手机号', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (!validatePhone(value)) return callback(new Error('请输入正确的11位手机号'))
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  captcha: [
+    { required: true, message: '请输入验证码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (!value) return callback()
+        if (String(value).trim().toUpperCase() !== String(resetCaptchaExpected.value).toUpperCase()) {
+          return callback(new Error('验证码不正确'))
+        }
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        const result = validatePasswordStrength(value)
+        if (!result.valid) return callback(new Error(result.msg))
+        callback()
+      },
+      trigger: 'blur',
+    },
+  ],
+  confirmPassword: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (String(value) !== String(resetForm.newPassword)) return callback(new Error('两次密码不一致'))
         callback()
       },
       trigger: 'blur',
@@ -114,19 +263,8 @@ function onCaptchaChange(value) {
   captchaExpected.value = value
 }
 
-function loadUsers() {
-  const raw = localStorage.getItem(usersKey)
-  if (!raw) return {}
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
-}
-
-function saveUsers(users) {
-  localStorage.setItem(usersKey, JSON.stringify(users))
+function onResetCaptchaChange(value) {
+  resetCaptchaExpected.value = value
 }
 
 async function submit(formEl) {
@@ -136,36 +274,39 @@ async function submit(formEl) {
     if (!valid) return
     loading.value = true
     try {
-      const users = loadUsers()
       const username = String(form.username).trim()
       const password = String(form.password)
 
       if (mode.value === 'register') {
-        if (users[username]) {
+        // 注册：检查用户名是否已存在
+        if (auth.userExists(username)) {
           ElMessage.warning('账号已存在，请直接登录')
           mode.value = 'login'
           return
         }
-        users[username] = { password: encode(password), createdAt: new Date().toISOString() }
-        saveUsers(users)
+        // 注册：保存新用户
+        auth.register({ username, password, phone: form.phone })
         ElMessage.success('注册成功，请登录')
         mode.value = 'login'
         form.confirmPassword = ''
+        form.captcha = ''
+        captchaRef.value?.refresh()
         return
       }
 
-      const exists = users[username]
-      if (!exists) {
-        ElMessage.warning('账号不存在，请先注册')
-        mode.value = 'register'
-        form.confirmPassword = ''
-        return
-      }
-      if (decode(exists.password) !== password) {
-        ElMessage.error('密码不正确')
+      // 登录：验证密码
+      if (!auth.verifyPassword(username, password)) {
+        const exists = auth.userExists(username)
+        if (!exists) {
+          ElMessage.warning('账号不存在，请先注册')
+          mode.value = 'register'
+        } else {
+          ElMessage.error('密码不正确')
+        }
         return
       }
 
+      // 登录成功
       saveRemembered()
       auth.login({ username })
       ElMessage.success('登录成功')
@@ -177,19 +318,54 @@ async function submit(formEl) {
   })
 }
 
-function openForgot() {
-  forgotForm.username = form.username
-  forgotForm.contact = ''
-  forgotOpen.value = true
+// 打开密码重置对话框
+function openReset() {
+  resetForm.username = form.username
+  resetForm.phone = ''
+  resetForm.newPassword = ''
+  resetForm.confirmPassword = ''
+  resetForm.captcha = ''
+  resetStep.value = 1
+  resetOpen.value = true
 }
 
-function submitForgot() {
-  if (!forgotForm.username || !forgotForm.contact) {
-    ElMessage.warning('请填写账号与联系方式')
-    return
-  }
-  forgotOpen.value = false
-  ElMessage.success('已提交找回申请（演示）')
+// 密码重置第一步：验证账号和手机号
+async function submitResetStep1(formEl) {
+  const el = formEl?.value ?? formEl
+  if (!el) return
+  await el.validateField(['username', 'phone', 'captcha'], (valid) => {
+    if (!valid) return
+    // 验证账号和手机号是否匹配
+    const result = auth.resetPassword(resetForm.username, resetForm.phone, '')
+    if (result.msg === '账号不存在') {
+      ElMessage.error('账号不存在')
+      return
+    }
+    if (result.msg === '手机号不匹配') {
+      ElMessage.error('手机号与注册时不匹配')
+      return
+    }
+    // 验证通过，进入第二步
+    resetStep.value = 2
+  })
+}
+
+// 密码重置第二步：设置新密码
+async function submitResetStep2(formEl) {
+  const el = formEl?.value ?? formEl
+  if (!el) return
+  await el.validateField(['newPassword', 'confirmPassword'], (valid) => {
+    if (!valid) return
+    const result = auth.resetPassword(resetForm.username, resetForm.phone, resetForm.newPassword)
+    if (result.ok) {
+      ElMessage.success('密码重置成功，请使用新密码登录')
+      resetOpen.value = false
+      form.username = resetForm.username
+      form.password = ''
+    } else {
+      ElMessage.error(result.msg)
+    }
+  })
 }
 
 function openThirdLogin(provider) {
@@ -224,9 +400,45 @@ onMounted(() => {
           <el-form-item label="账号" prop="username">
             <el-input v-model="form.username" placeholder="手机号 / 邮箱 / 用户名" clearable />
           </el-form-item>
+
+          <!-- 注册时显示手机号输入 -->
+          <el-form-item v-if="mode === 'register'" label="手机号" prop="phone">
+            <el-input v-model="form.phone" placeholder="请输入11位手机号" clearable maxlength="11" />
+          </el-form-item>
+
           <el-form-item label="密码" prop="password">
             <el-input v-model="form.password" placeholder="请输入密码" show-password clearable />
           </el-form-item>
+
+          <!-- 注册时显示密码强度指示器 -->
+          <div v-if="mode === 'register' && form.password" class="strength-bar">
+            <div class="strength-track">
+              <div
+                class="strength-fill"
+                :style="{ width: `${passwordStrength * 20}%`, background: passwordStrengthColor }"
+              />
+            </div>
+            <span class="strength-label" :style="{ color: passwordStrengthColor }">
+              密码强度：{{ passwordStrengthLabel }}
+            </span>
+          </div>
+
+          <!-- 注册时显示密码要求提示 -->
+          <div v-if="mode === 'register'" class="password-tips">
+            <div :class="['tip', { met: form.password && hasUpper(form.password) }]">
+              包含大写字母
+            </div>
+            <div :class="['tip', { met: form.password && hasLower(form.password) }]">
+              包含小写字母
+            </div>
+            <div :class="['tip', { met: form.password && hasSpecial(form.password) }]">
+              包含特殊字符
+            </div>
+            <div :class="['tip', { met: hasMinLen(form.password, 8) }]">
+              至少8位
+            </div>
+          </div>
+
           <el-form-item v-if="mode === 'register'" label="确认密码" prop="confirmPassword">
             <el-input v-model="form.confirmPassword" placeholder="请再次输入密码" show-password clearable />
           </el-form-item>
@@ -239,7 +451,7 @@ onMounted(() => {
 
           <div class="extra">
             <el-checkbox v-model="form.remember">记住密码</el-checkbox>
-            <a class="forgot" href="#" @click.prevent="openForgot">忘记密码？</a>
+            <a class="forgot" href="#" @click.prevent="openReset">忘记密码？</a>
           </div>
 
           <button class="submit" type="button" :disabled="loading" @click="submit(formRef)">
@@ -263,18 +475,83 @@ onMounted(() => {
       </div>
     </div>
 
-    <el-dialog v-model="forgotOpen" title="找回密码" width="420px">
-      <el-form label-position="top">
-        <el-form-item label="账号">
-          <el-input v-model="forgotForm.username" placeholder="请输入账号" />
+    <!-- 密码重置对话框 -->
+    <el-dialog v-model="resetOpen" title="重置密码" width="440px" :close-on-click-modal="false">
+      <!-- 第一步：验证身份 -->
+      <el-form
+        v-if="resetStep === 1"
+        :model="resetForm"
+        :rules="resetRules"
+        label-position="top"
+        ref="resetFormRef"
+      >
+        <el-form-item label="账号" prop="username">
+          <el-input v-model="resetForm.username" placeholder="请输入注册时的账号" clearable />
         </el-form-item>
-        <el-form-item label="联系方式">
-          <el-input v-model="forgotForm.contact" placeholder="手机号 / 邮箱" />
+        <el-form-item label="手机号" prop="phone">
+          <el-input v-model="resetForm.phone" placeholder="请输入注册时的手机号" clearable maxlength="11" />
+        </el-form-item>
+        <el-form-item label="验证码" prop="captcha">
+          <div class="captcha-row">
+            <el-input v-model="resetForm.captcha" placeholder="不区分大小写" clearable />
+            <CaptchaCanvas ref="resetCaptchaRef" @change="onResetCaptchaChange" />
+          </div>
         </el-form-item>
       </el-form>
+
+      <!-- 第二步：设置新密码 -->
+      <el-form v-else :model="resetForm" :rules="resetRules" label-position="top" ref="resetFormRef">
+        <div class="reset-step-hint">身份验证通过，请设置新密码</div>
+        <el-form-item label="新密码" prop="newPassword">
+          <el-input v-model="resetForm.newPassword" placeholder="请输入新密码" show-password clearable />
+        </el-form-item>
+        <!-- 新密码强度指示器 -->
+        <div v-if="resetForm.newPassword" class="strength-bar">
+          <div class="strength-track">
+            <div
+              class="strength-fill"
+              :style="{
+                width: `${resetPasswordStrength * 20}%`,
+                background: resetPasswordStrength <= 1 ? '#f56c6c' : resetPasswordStrength <= 3 ? '#e6a23c' : '#67c23a',
+              }"
+            />
+          </div>
+          <span
+            class="strength-label"
+            :style="{
+              color: resetPasswordStrength <= 1 ? '#f56c6c' : resetPasswordStrength <= 3 ? '#e6a23c' : '#67c23a',
+            }"
+          >
+            密码强度：{{ resetPasswordStrength <= 1 ? '弱' : resetPasswordStrength <= 3 ? '中' : '强' }}
+          </span>
+        </div>
+        <div class="password-tips">
+          <div :class="['tip', { met: resetForm.newPassword && hasUpper(resetForm.newPassword) }]">
+            包含大写字母
+          </div>
+          <div :class="['tip', { met: resetForm.newPassword && hasLower(resetForm.newPassword) }]">
+            包含小写字母
+          </div>
+          <div :class="['tip', { met: resetForm.newPassword && hasSpecial(resetForm.newPassword) }]">
+            包含特殊字符
+          </div>
+          <div :class="['tip', { met: hasMinLen(resetForm.newPassword, 8) }]">
+            至少8位
+          </div>
+        </div>
+        <el-form-item label="确认新密码" prop="confirmPassword">
+          <el-input v-model="resetForm.confirmPassword" placeholder="请再次输入新密码" show-password clearable />
+        </el-form-item>
+      </el-form>
+
       <template #footer>
-        <el-button @click="forgotOpen = false">取消</el-button>
-        <el-button type="primary" @click="submitForgot">提交</el-button>
+        <el-button @click="resetOpen = false">取消</el-button>
+        <el-button v-if="resetStep === 1" type="primary" @click="submitResetStep1(resetFormRef)">
+          验证身份
+        </el-button>
+        <el-button v-else type="primary" @click="submitResetStep2(resetFormRef)">
+          重置密码
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -450,6 +727,68 @@ onMounted(() => {
 .third-icon {
   height: 22px;
   width: 22px;
+}
+
+/* 密码强度条 */
+.strength-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 8px;
+}
+
+.strength-track {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(12, 35, 64, 0.08);
+  overflow: hidden;
+}
+
+.strength-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease, background 0.3s ease;
+}
+
+.strength-label {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* 密码要求提示 */
+.password-tips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -2px 0 8px;
+}
+
+.tip {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(12, 35, 64, 0.06);
+  color: var(--text-muted);
+  transition: background 0.2s, color 0.2s;
+}
+
+.tip.met {
+  background: rgba(103, 194, 58, 0.12);
+  color: #67c23a;
+}
+
+/* 重置密码步骤提示 */
+.reset-step-hint {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(103, 194, 58, 0.08);
+  color: #67c23a;
+  font-weight: 700;
+  font-size: 14px;
 }
 
 @media (max-width: 920px) {
